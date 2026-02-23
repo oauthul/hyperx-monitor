@@ -1,0 +1,8 @@
+[package]
+name = "battery_mon"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+crossbeam-channel = "0.5.15"
+hidapi = "2.6.4"
