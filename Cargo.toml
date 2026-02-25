@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 crossbeam-channel = "0.5.15"
 hidapi = "2.6.4"
+tracing = "0.1.44"
