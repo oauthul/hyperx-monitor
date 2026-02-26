@@ -16,7 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install dependencies
+      run: sudo update && sudo apt-get install libudev-dev
     - name: Check
       run: cargo check
-    - name: Build
+    - name: Build binary
       run: cargo build --verbose
