@@ -19,7 +19,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install dependencies
-      run: sudo apt update && sudo apt-get install libudev-dev
+      run: sudo apt update && sudo apt-get install libudev-dev libgtk-3-dev libxdo-dev libappindicator3-dev libayatana-appindicator3-dev
     - name: Check
       run: cargo check
     - name: Build binary
