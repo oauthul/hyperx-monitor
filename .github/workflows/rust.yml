@@ -2,11 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "tray_icon" ]
     paths:
       - 'src/**'
   pull_request:
-    branches: [ "main" ]
+    branches: [ "tray_icon" ]
 
 env:
   CARGO_TERM_COLOR: always
