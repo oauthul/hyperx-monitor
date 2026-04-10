@@ -16,11 +16,15 @@ const READ_FAIL: u8 = 0;
 
 #[derive(Debug)]
 pub struct HeadsetInfo {
-    pub default_handle: Option<HidDevice>,
-    pub status_handle: Option<HidDevice>,
     pub battery_level: Option<Response>,
     pub charging_status: Option<Response>,
     pub device_status: Option<Response>,
+}
+
+pub struct Handles {
+    pub battery_handle: Option<HidDevice>,
+    pub charging_handle: Option<HidDevice>,
+    pub status_handle: Option<HidDevice>
 }
 
 #[derive(Debug, PartialEq)]
@@ -43,8 +47,6 @@ impl fmt::Display for Response {
 impl Default for HeadsetInfo {
     fn default() -> Self {
         Self {
-            default_handle: None,
-            status_handle: None,
             battery_level: None,
             charging_status: None,
             device_status: None,
@@ -52,62 +54,21 @@ impl Default for HeadsetInfo {
     }
 }
 
+impl Default for Handles {
+    fn default() -> Self {
+        Self {
+            battery_handle: None,
+            charging_handle: None,
+            status_handle: None
+        }
+    }
+}
+
 
 impl HeadsetInfo {
     #[instrument(skip_all)]
-    pub fn get_default_handle(api: &Result<HidApi, HidError> ) -> Option<HidDevice> {
-        match api {
-            Ok(handle) => {
-                let target = handle.device_list().find(|&target| target.product_id() == PRODUCT_ID &&
-                                                                target.vendor_id() == VENDOR_ID &&
-                                                                target.usage_page() == DEFAULT_USAGE_PAGE)?;
-                let device = target.open_device(&handle);
-                match device {
-                    Ok(device) => {
-                        return Some(device)
-                    }
-                    Err(open_err) => {
-                        error!("failed to open device! error: {}", open_err);
-                        return None
-                    }
-                }
-            }
-            Err(init_err) => {
-                error!("failed to initialize! error: {}", init_err);
-                return None
-            }
-        }
-
-    }
-
-    pub fn get_status_handle(api: &Result<HidApi, HidError>) -> Option<HidDevice> {
-        match api {
-            Ok(handle) => {
-                let target = handle.device_list().find(|&target| target.product_id() == PRODUCT_ID &&
-                                                                target.vendor_id() == VENDOR_ID &&
-                                                                target.usage_page() == STATUS_USAGE_PAGE)?;
-                let device = target.open_device(&handle);
-                match device {
-                    Ok(device) => {
-                        return Some(device)
-                    }
-                    Err(open_err) => {
-                        error!("failed to open device! error: {}", open_err);
-                        return None
-                    }
-                }
-            }
-            Err(init_err) => {
-                error!("failed to initialize! error: {}", init_err);
-                return None
-            }
-        }
-
-    }
-    
-    #[instrument(skip_all)]
-    pub fn get_battery(&mut self) -> Option<Response> {
-        if let Some(target) = &self.default_handle {
+    pub fn get_battery(&mut self, handles: &Handles) -> Option<Response> {
+        if let Some(target) = &handles.battery_handle {
             let _ = target.set_blocking_mode(false);
             let mut buf = [0u8; 64];
 
@@ -152,9 +113,9 @@ impl HeadsetInfo {
         return None
     }
 
-    pub fn charging_monitor(&self) -> Option<bool> {
+    pub fn charging_monitor(&self, handles: &Handles) -> Option<bool> {
         let mut buf = [0u8; 64];
-        if let Some(target) = &self.default_handle {
+        if let Some(target) = &handles.charging_handle {
             match target.set_blocking_mode(true) {
                 Ok(_) => debug!("set non-blocking mode to true"),
                 Err(err) => error!("failed to set non-blocking mode! error: {}", err)
@@ -212,5 +173,57 @@ impl HeadsetInfo {
     //         return false
     //     }
     // }
+}
 
+impl Handles {
+    #[instrument(skip_all)]
+    pub fn get_default_handle(api: &Result<HidApi, HidError>) -> Option<HidDevice> {
+        match api {
+            Ok(handle) => {
+                let target = handle.device_list().find(|&target| target.product_id() == PRODUCT_ID &&
+                                                                target.vendor_id() == VENDOR_ID &&
+                                                                target.usage_page() == DEFAULT_USAGE_PAGE)?;
+                let device = target.open_device(&handle);
+                match device {
+                    Ok(device) => {
+                        Some(device)
+                    }
+                    Err(open_err) => {
+                        error!("failed to open device! error: {}", open_err);
+                        None
+                    }
+                }
+            }
+            Err(init_err) => {
+                error!("failed to initialize! error: {}", init_err);
+                None
+            }
+        }
+
+    }
+
+    pub fn get_status_handle(api: &Result<HidApi, HidError>) -> Option<HidDevice> {
+        match api {
+            Ok(handle) => {
+                let target = handle.device_list().find(|&target| target.product_id() == PRODUCT_ID &&
+                                                                target.vendor_id() == VENDOR_ID &&
+                                                                target.usage_page() == STATUS_USAGE_PAGE)?;
+                let device = target.open_device(&handle);
+                match device {
+                    Ok(device) => {
+                        Some(device)
+                    }
+                    Err(open_err) => {
+                        error!("failed to open device! error: {}", &open_err);
+                        None
+                    }
+                }
+            }
+            Err(init_err) => {
+                error!("failed to initialize! error: {}", &init_err);
+                None
+            }
+        }
+
+    }
 }

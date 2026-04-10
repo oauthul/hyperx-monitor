@@ -4,21 +4,28 @@ use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
 use tracing::{info, debug, error, warn, Level};
 use tracing_subscriber::FmtSubscriber;
-use hardware::{Response, HeadsetInfo};
+use hardware::{Response, HeadsetInfo, Handles};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
 
 fn main() {
     logger_setup();    
 
-    let mut headset = HeadsetInfo::default();
+    let (s, r) = unbounded::<Response>();
+    let background_sender = s.clone();
+    let battery_sender = s.clone();
+    let charging_sender = s.clone();
+
+    let mut battery = HeadsetInfo::default();
+    let mut headset = Handles::default();
 
     loop {
         match get_handles(&mut headset) {
             Ok(_) => { 
                 info!("got all handles!");
-                about_device(headset.default_handle.as_ref());
-                break 
+                about_device(headset.battery_handle.as_ref());
+                break
             },
             Err(e) => {
                 warn!("usb is not plugged in/udev rules not set up correctly!");
@@ -26,8 +33,11 @@ fn main() {
                 sleep(Duration::from_secs(3));
             }
         }
-    }
+    };
+
+
     debug!("looping battery check, finishing at timeout = 5");
+
     spawn(move || {
         let mut timeout: u16 = 0;
         loop {
@@ -36,7 +46,7 @@ fn main() {
                 debug!("loop stopping");
                 break
             }
-            match headset.get_battery() {
+            match battery.get_battery(&headset) {
                 Some(response) => info!("{}", response),
                 None => ()
             };
@@ -45,32 +55,29 @@ fn main() {
         }
     });
 
-    let mut headset_chg = HeadsetInfo::default();
-    let _ = get_handles(&mut headset_chg);
-
-    spawn(move || {
-        debug!("spawning charging monitor");
-        headset_chg.charging_monitor()
-    });
-
-    let (s, r) = unbounded::<Response>();
 
     match r.recv() {
-        Ok(resp) => debug!("response: {}", resp),
+        Ok(_) => (),
         Err(_) => ()
-    }
+    };
+    // spawn(move || {
+    //     debug!("spawning charging monitor");
+    //     headset.charging_monitor()
+    // });
 }
 
-fn get_handles(headset: &mut HeadsetInfo) -> Result<(), &'static str> {
+fn get_handles(headset: &mut Handles) -> Result<(), &'static str> {
     let api = hidapi::HidApi::new();
+    
+    headset.battery_handle = Handles::get_default_handle(&api);
+    headset.charging_handle = Handles::get_default_handle(&api);
+    headset.status_handle = Handles::get_status_handle(&api);
 
-    headset.default_handle = HeadsetInfo::get_default_handle(&api);
-    headset.status_handle = HeadsetInfo::get_status_handle(&api);
-
-    debug!("get default handle.. {}", if headset.default_handle.is_some() { "ok" } else { "error" } );
+    debug!("get battery handle.. {}", if headset.battery_handle.is_some() { "ok" } else { "error" } );
+    debug!("get charging handle.. {}", if headset.charging_handle.is_some() { "ok" } else { "error" } );
     debug!("get status handle.. {}", if headset.status_handle.is_some() { "ok" } else { "error" } );
 
-    if headset.default_handle.is_none() || headset.status_handle.is_none() {
+    if headset.battery_handle.is_none() || headset.status_handle.is_none() {
         Err("failed to get all handles!")
     } else {
         Ok(())
@@ -101,4 +108,3 @@ fn about_device(api: Option<&HidDevice>) {
         }
     }
 }
-
