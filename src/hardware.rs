@@ -18,7 +18,7 @@ pub const READ_FAIL: u8 = 0;
 pub struct HeadsetInfo {
     pub battery_level: Option<Response>,
     pub charging_status: Option<Response>,
-    pub device_status: Option<Response>,
+    pub device_status: Option<Response>
 }
 
 
@@ -71,15 +71,10 @@ impl HeadsetInfo {
     #[instrument(skip_all)]
     pub fn get_battery(&mut self, handles: &Handles) -> Option<Response> {
         if let Some(target) = &handles.battery_handle {
-            let _ = target.set_blocking_mode(false);
-            let mut buf = [0u8; 64];
-            while let Ok(drain) = target.read_timeout(&mut buf, 5) {
-                if drain == 0 { break; } 
-            }
-
-            match target.write(&BATTERY_BUFFER) {
+            let mut buf = [0u8; 20];
+            match target.send_output_report(&BATTERY_BUFFER) {
                 Ok(bytes) => {
-                    debug!("written {} bytes", bytes);
+                    debug!("written bytes");
                 }
                 Err(write_error) => {
                     warn!("failed to write data to headset! {}", write_error);
@@ -87,43 +82,41 @@ impl HeadsetInfo {
                 }
             };
 
-
+            // target.get_input_report(&mut [0x06]);
             let mut timeout: u8 = 0;
             loop {
-                while let Ok(drain) = target.read_timeout(&mut buf, 5) {
-                    if drain == 0 { break; } 
-                }
-
                 let read_buffer = &target.read_timeout(&mut buf, 100);
                 match read_buffer {
                     Ok(read_bytes) => {
                         if buf[0..5] == [0x06, 0xFF, 0xBB, 0x02, 0x00] && buf[BATTERY_LEVEL_POS] > READ_FAIL {
                             debug!("read {} bytes", read_bytes);
                             debug!("successful buffer: {:?}", buf);
+                            self.battery_level = Some(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]));
                             return Some(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]))
-                        } else if buf[0..5] == [0x06, 0xFF, 0xBB, 0x01, 0x03] || buf[0..2] == [100, 3] {
+                        } else if buf[0..5] == [0x06, 0xFF, 0xBB, 0x01, 0x03] {
                             debug!("device off, moving to blocking wait");
-                            let _ = target.set_blocking_mode(true);
                             let _ = target.read(&mut buf);
-                        } else if buf[0..5] == [0x06, 0xFF, 0xBB, 0x01, 0x01] || buf[0..2] == [100, 1] {
+                        } else if buf[0..5] == [0x06, 0xFF, 0xBB, 0x01, 0x01] {
                             debug!("device on, re-writing data");
-                            target.write(&BATTERY_BUFFER);
-                            sleep(Duration::from_millis(10));
-                            continue
-                        } else if buf [0..5] == [0, 0, 0, 0 ,0] {
-                            debug!("testing");
-                            target.write(&BATTERY_BUFFER);
-                            sleep(Duration::from_millis(10));
+                            match target.send_output_report(&BATTERY_BUFFER) {
+                                Ok(bytes) => {
+                                    debug!("written bytes");
+                                }
+                                Err(write_error) => {
+                                    warn!("failed to write data to headset! {}", write_error);
+                                    return None
+                                }
+                            }
+                            sleep(Duration::from_millis(30));
                             continue
                         } else {
-                            warn!("unexpected value, trying again.. att: {}", timeout);
-                            debug!("data in buffer: {:?}", buf);
-                            timeout += 1;
-                            if timeout == 10 {
-                                error!("att: {}, timeout reached, headset is non-responsive.", timeout);
-                                return None
-                            }
-                            sleep(Duration::from_millis(10));
+                            sleep(Duration::from_millis(30));
+                        }
+
+                        timeout += 1;
+                        if timeout == 10 {
+                            error!("battery level capture timed out! waiting few seconds to capture again..");
+                            sleep(Duration::from_secs(5))
                         }
                     },
                     Err(read_err) => error!("failed to read buffer! {}", read_err),
@@ -134,7 +127,7 @@ impl HeadsetInfo {
         return None
     }
 
-    pub fn charging_monitor(&self, handles: &Handles) -> Option<bool> {
+    pub fn charging_monitor(&self, handles: &Handles) -> () {
         let mut buf = [0u8; 64];
         if let Some(target) = &handles.charging_handle {
             match target.set_blocking_mode(true) {
@@ -146,54 +139,17 @@ impl HeadsetInfo {
                 match target.read(&mut buf) {
                     Ok(size) => {
                         if buf[3..5] == [3, 1] {
-                            debug!("currently charging");
+                            debug!("device currently charging.");
                         } else if buf[3..5] == [3, 0] {
-                            debug!("not charging");
+                            debug!("device currently not charging.");
                         }
                     },
                     Err(read_err) => error!("failed to read! {}", read_err),
                 }
             }
 
-        } else {
-            None
         }
     }
-
-    // pub fn prepare_for_read(&self) {
-    //     if let Some(target) = &self.default_handle {
-    //         let mut temp_buf = [0u8; 65];
-    //         temp_buf[0] = 0x06;
-    //         let prepare = target.get_input_report(&mut temp_buf);
-    //         match prepare {
-    //             Ok(read_bytes) => debug!("successfully got input report, read {} bytes", read_bytes),
-    //             Err(e) => warn!("failed to get input report, error: {}", e)
-    //         }
-    //     }
-    // }
-
-    // pub fn is_connected(&self) -> bool {
-    //     if let Some(target) = &self.status_handle {
-    //         let mut buf = [0u8; 64];
-    //         let _ = target.set_blocking_mode(true);
-    //         loop {
-    //             match target.read(&mut buf) {
-    //                 Ok(bytes) => {
-    //                     if bytes == 2 && buf[0..2] == [100, 1] {
-    //                         debug!("headphones connected");
-    //                         return true;
-    //                     } else if bytes == 2 && buf[0..2] == [100, 3] {
-    //                         debug!("headphones disconnected.. awaiting connection");
-    //                     }
-    //                 }, 
-    //                 Err(_) => (),
-    //             }
-    //         }
-            
-    //     } else {
-    //         return false
-    //     }
-    // }
 }
 
 impl Handles {
@@ -229,6 +185,7 @@ impl Handles {
             }
         }
     }
+
     pub fn about_device(&self) {
         let status = self.status_handle.as_ref()
                     .and_then(|d| d.get_device_info().ok());
@@ -237,9 +194,8 @@ impl Handles {
                 Ok(info) => {
                     info!("{:=^60}", " device info via hidapi ");
                     info!("{:<27} {}", "product name:", info.product_string().unwrap_or("unknown"));
-                    debug!("{:<27} {:#X}, {:#X}", "usage pages:", DEFAULT_USAGE_PAGE, STATUS_USAGE_PAGE);
-                    debug!("{:<27} {:#X}, {:#X}", "usages:", info.usage(), status.as_ref().map(|i| i.usage())
-                                                                                .unwrap_or_else(|| 0));
+                    debug!("{:<27} {:#X}, {:#X}", "usage pages:", info.usage_page(), status.as_ref().map(|i| i.usage_page()).unwrap_or_else(|| 0));
+                    debug!("{:<27} {:#X}, {:#X}", "usages:", info.usage(), status.as_ref().map(|i| i.usage()).unwrap_or_else(|| 0));
                     debug!("{:<27} {:#X}", "vendor id:", info.vendor_id());
                     debug!("{:<27} {:#X}", "product id:", info.product_id());
                     debug!("{:<27} {:?}", "connection:", info.bus_type());
@@ -247,7 +203,7 @@ impl Handles {
                                                                                                       .unwrap_or_else(|| 0));
                     info!("{:=^60}", "");
                 }
-                Err(e) => warn!("failed to read metadata: {}", e),
+                Err(e) => warn!("failed to read metadata: {}", e)
             }
         }
     }

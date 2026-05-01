@@ -15,8 +15,9 @@ fn main() {
     let (s,r) = unbounded::<Response>();
     let mut battery = HeadsetInfo::default();
     let mut handles = Handles::default();
-    info!("looping battery check");
+    get_handles(&mut handles).unwrap_or_else(|e| _ = e);
 
+    debug!("enabling battery capture");
     spawn(move || {
         let mut timeout: u16 = 0;
         loop {
