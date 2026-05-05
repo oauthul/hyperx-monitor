@@ -27,8 +27,11 @@ fn main() {
                 break
             }
             match battery.get_battery(&handles) {
-                Some(resp) => info!("{}", resp),
-                None => get_handles(&mut handles).unwrap_or_else(|e| _ = e)
+                Ok(resp) => info!("{}", resp),
+                Err(resp) => {
+                    warn!("{} attempting to retry..", resp);
+                    get_handles(&mut handles).unwrap_or_else(|e| _ = e)
+                }
             }
             sleep(Duration::from_secs(2));
             timeout += 1;

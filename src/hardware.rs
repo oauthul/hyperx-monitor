@@ -10,8 +10,8 @@ pub const STATUS_USAGE_PAGE: u16 = 0xFFC0;
 pub const VENDOR_ID: u16 = 0x03F0;
 pub const PRODUCT_ID: u16 = 0x0D93;
 pub const BATTERY_LEVEL_POS: usize = 7;
-pub const READ_SUCCESS_SIZE: usize = 20;
-pub const READ_FAIL: u8 = 0;
+pub const READ_SUCCESS: usize = 20;
+pub const READ_EMPTY: u8 = 0;
 
 #[repr(u8)]
 pub enum Commands {
@@ -24,7 +24,7 @@ pub enum Commands {
 
 #[derive(Debug)]
 pub struct HeadsetInfo {
-    pub battery_level: Option<Response>,
+    pub battery_level: Result<Response, String>,
     pub charging_status: Option<Response>,
     pub device_status: Option<Response>
 }
@@ -56,7 +56,7 @@ impl fmt::Display for Response {
 impl Default for HeadsetInfo {
     fn default() -> Self {
         Self {
-            battery_level: None,
+            battery_level: Err(format!("uninitialized device!")),
             charging_status: None,
             device_status: None,
         }
@@ -75,27 +75,27 @@ impl Default for Handles {
 
 impl HeadsetInfo {
     #[instrument(skip_all)]
-    pub fn get_battery(&mut self, handles: &Handles) -> Option<Response> {
+    pub fn get_battery(&mut self, handles: &Handles) -> Result<Response, String> {
         if let Some(target) = &handles.base_handle {
             let mut buf = [0u8; 20];
             let mut timeout: u8 = 0;
-            let _ = self.execute_command(Commands::GetBatteryLevel, target);
+            self.execute_command(Commands::GetBatteryLevel, target)?;
 
             loop {
                 let read_buffer = &target.read_timeout(&mut buf, 100);
                 match read_buffer {
                     Ok(read_bytes) => {
-                        if buf[3..5] == [0x02, 0x00] && buf[BATTERY_LEVEL_POS] > READ_FAIL {
+                        if buf[3..5] == [0x02, 0x00] && buf[BATTERY_LEVEL_POS] > READ_EMPTY {
                             debug!("read {} bytes", read_bytes);
                             debug!("successful buffer: {:?}", buf);
-                            self.battery_level = Some(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]));
-                            return Some(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]))
+                            self.battery_level = Ok(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]));
+                            return Ok(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]))
                         } else if buf[3..5] == [0x01, 0x03] {
                             debug!("device off, moving to blocking wait");
-                            let _ = target.read(&mut buf);
+                            target.read(&mut buf).map_err(|x| format!("{}", x))?;
                         } else if buf[3..5] == [0x01, 0x01] {
                             debug!("device on, re-writing data");
-                            let _ = self.execute_command(Commands::GetBatteryLevel, target);
+                            self.execute_command(Commands::GetBatteryLevel, target)?;
                             sleep(Duration::from_millis(30));
                             continue
                         } else {
@@ -114,7 +114,7 @@ impl HeadsetInfo {
             }
             
         }
-        return None
+        return Err(format!("failed to get battery level!"))
     }
 
     pub fn charging_monitor(&self, handles: &Handles) -> () {
@@ -236,8 +236,10 @@ impl Handles {
                 Ok(info) => {
                     info!("{:=^60}", " device info via hidapi ");
                     info!("{:<27} {}", "product name:", info.product_string().unwrap_or("unknown"));
-                    debug!("{:<27} {:#X}, {:#X}", "usage pages:", info.usage_page(), status.as_ref().map(|i| i.usage_page()).unwrap_or_else(|| 0));
-                    debug!("{:<27} {:#X}, {:#X}", "usages:", info.usage(), status.as_ref().map(|i| i.usage()).unwrap_or_else(|| 0));
+                    debug!("{:<27} {:#X}, {:#X} ({})", "usage pages:", info.usage_page(), status.as_ref().map(|i| i.usage_page()).unwrap_or_else(|| 0),
+                                                                    if cfg!(unix) { "inaccurate" } else { "" });
+                    debug!("{:<27} {:#X}, {:#X} ({})", "usages:", info.usage(), status.as_ref().map(|i| i.usage()).unwrap_or_else(|| 0),
+                                                            if cfg!(unix) { "inaccurate" } else { "" });
                     debug!("{:<27} {:#X}", "vendor id:", info.vendor_id());
                     debug!("{:<27} {:#X}", "product id:", info.product_id());
                     debug!("{:<27} {:?}", "connection:", info.bus_type());
