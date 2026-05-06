@@ -27,7 +27,6 @@ The default structure for each HID packet is:
 
 ## Sending a Request
 You can send a request by sending an output report to the device.\
-The typical 
 Refer to the commands document to see how each command is structured.
 
 ## Parsing a Response
