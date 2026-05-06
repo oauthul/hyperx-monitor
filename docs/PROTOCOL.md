@@ -12,13 +12,13 @@ The default structure for each HID packet is:
 
 ``[0x06, 0xFF, 0xBB, COMMAND]`` or ``[0x06, 0xFF, 0xBB, COMMAND, PARAMETER]``
 
-| Byte | Value | Description |
+|  Byte  |  Value  |  Description  |
 |:------:|:-------:|:-------------:|
-|0     |0x06       |Report ID             |
-|1     |0xFF       |Fixed Value             |
-|2     |0xBB       |Fixed Value             |
-|3     |COMMAND    |Request/Response             |
-|4     |PARAMETER  |Request/Response             |
+|0       |0x06     |Report ID      |
+|1       |0xFF     |Fixed Value    |
+|2       |0xBB     |Fixed Value    |
+|3       |COMMAND  |Request/Response|
+|4       |PARAMETER|Request/Response|
 
 ``0x06`` is the Report ID.\
 ``0xFF`` and ``0xBB`` are fixed values.\
