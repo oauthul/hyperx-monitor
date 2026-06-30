@@ -2,11 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: [ "tray_icon" ]
+    branches: [ "refactor" ]
     paths:
       - 'src/**'
   pull_request:
-    branches: [ "tray_icon" ]
+    branches: [ "refactor" ]
 
 env:
   CARGO_TERM_COLOR: always

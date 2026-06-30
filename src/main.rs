@@ -2,41 +2,45 @@ mod hardware;
 
 use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
-use tracing::{info, debug, error, warn, Level};
+use tracing::{info, debug, error, warn, trace, Level};
 use tracing_subscriber::FmtSubscriber;
-use hardware::{Response, HeadsetInfo, Handles};
+use hardware::{Response, HeadsetInfo};
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
+use std::env;
 
 fn main() {
-    logger_setup();    
+    let loglevel = env::var("LOG_LEVEL");
+    let mut level: Level = Level::INFO; // Defaults to INFO
+
+    match loglevel {
+        Ok(val) => match val {
+            arg if arg == "DEBUG".to_string() => level = Level::DEBUG,
+            arg if arg == "INFO".to_string() => level = Level::INFO,
+            arg if arg == "WARN".to_string() => level = Level::WARN,
+            arg if arg == "TRACE".to_string() => level = Level::TRACE,
+            arg if arg == "ERROR".to_string() => level = Level::ERROR,
+            _ => {
+                eprintln!("ENV: unknown log level. did you spell it correctly?");
+                level = Level::INFO
+            }
+        },
+        Err(error) => debug!("error: {}", error),
+    }
+
+    logger_setup(level);
 
     let (s,r) = unbounded::<Response>();
-    let mut battery = HeadsetInfo::default();
-    let mut handles = Handles::default();
-    get_handles(&mut handles).unwrap_or_else(|e| _ = e);
+    let mut device: HeadsetInfo;
 
-    debug!("enabling battery capture");
-    spawn(move || {
-        let mut timeout: u16 = 0;
-        loop {
-            info!("timeout: {}", timeout);
-            if timeout == 10 {
-                info!("timeout reached, loop is stopping");
-                break
-            }
-            match battery.get_battery(&handles) {
-                Ok(resp) => info!("{}", resp),
-                Err(resp) => {
-                    warn!("{} attempting to retry..", resp);
-                    get_handles(&mut handles).unwrap_or_else(|e| _ = e)
-                }
-            }
-            sleep(Duration::from_secs(2));
-            timeout += 1;
-        }
-    });
+    match HeadsetInfo::new() {
+        Ok(headsetinfo) => device = headsetinfo,
+        Err(error) => panic!("error: '{}'; failed to get handle! panicking!", error)
+    }
+
+    device.about_device();
+    device.on_connect_info();
 
     match r.recv() {
         Ok(_) => (),
@@ -45,31 +49,16 @@ fn main() {
 
 }
 
-fn get_handles(headset: &mut Handles) -> Result<(), &'static str> {
-    let api = hidapi::HidApi::new().map_err(|_| "api failed to initialize!")?;
-    
-    headset.base_handle = Handles::get_base_handle(&api);
-    headset.status_handle = Handles::get_status_handle(&api);
-
-    debug!("get base handle.. {}", if headset.base_handle.is_some() { "ok" } else { "error" } );
-    debug!("get status handle.. {}", if headset.status_handle.is_some() { "ok" } else { "error" } );
-
-    if headset.base_handle.is_none() || headset.status_handle.is_none() {
-        return Err("failed to get all handles! did usb get disconnected?")
-    }
-
-    headset.about_device();
-    Ok(())
-}
-
-fn logger_setup() {
+fn logger_setup(level: Level) {
     let subscriber = FmtSubscriber::builder()
-                    .with_max_level(Level::TRACE)
+                    .with_max_level(level)
                     .with_thread_names(true)
+                    .with_target(false)
                     .finish();
     let logging = tracing::subscriber::set_global_default(subscriber);
+
     match logging {
-        Ok(_) => debug!("logging active"),
-        Err(log_init_err) => error!("failed to initialize event logger! error: {}", log_init_err)
+        Ok(_) => debug!("logging enabled, current level: {}", level.to_string()),
+        Err(error) => error!("error: '{}'; failed to init logging!", error) 
     }
 }
