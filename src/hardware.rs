@@ -356,7 +356,7 @@ impl HeadsetInfo {
     #[instrument(level = "debug", skip_all)]
     pub fn get_handle(api: &mut HidApi) -> Result<HidDevice, String> {
         let mut retry_count: u8 = 0;
-        let mut retry_sec: u8;
+        let mut retry_sec: u64;
 
         loop {
             match api.refresh_devices() {
@@ -395,6 +395,7 @@ impl HeadsetInfo {
             };
 
             debug!("sleeping for {} seconds", retry_sec);
+            sleep(Duration::from_secs(retry_sec));
         
             retry_count = retry_count.saturating_add(1);
         }
