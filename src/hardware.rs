@@ -10,24 +10,36 @@ pub const VENDOR_ID: u16 = 0x03F0;
 pub const PRODUCT_ID: u16 = 0x0D93;
 pub const BATTERY_LEVEL_POS: usize = 7;
 pub const READ_SUCCESS: usize = 20;
-pub const READ_EMPTY: u8 = 0;
+pub const READ_EMPTY: usize = 0;
 
 #[repr(u8)]
 #[derive(Debug)]
 pub enum Commands {
+    GetHeadsetStatus = 1,
     GetBatteryLevel = 2,
     GetChargingStatus = 3,
-    GetHeadsetStatus = 1,
     GetMicrophoneStatus = 5,
-    GetAutoShutdownTime = 7,
-    GetNoiseGateStatus = 13,
     GetSidetoneStatus = 6,
+    GetAutoShutdownTime = 7,
     GetSidetoneVolume = 11,
+    GetNoiseGateStatus = 13,
     SetSidetoneStatus = 33,
     SetAutoShutdownTime = 34,
     SetSidetoneVolume = 35,
     // to set noisegate status use "SetSidetoneStatus"
 }
+
+#[derive(Debug, PartialEq)]
+pub enum HeadsetError {
+    Disconnected,
+    IoError,
+    WriteError,
+    ReadError { expected: u8, read: u8 },
+    HidApiError(String),
+    GetHandleError,
+    FlushError
+}
+
 
 #[derive(Debug)]
 pub struct HeadsetInfo {
@@ -71,9 +83,9 @@ impl fmt::Display for Response {
 
 impl HeadsetInfo {
     #[instrument(skip_all)]
-    pub fn new() -> Result<Self, String> {
+    pub fn new(api: &mut HidApi) -> Result<Self, String> {
         Ok(Self {
-            handle: Self::get_handle()?,
+            handle: Self::get_handle(api)?,
             battery_level: None,
             charging_status: None,
             device_status: None,
@@ -88,40 +100,75 @@ impl HeadsetInfo {
     #[instrument(level = "debug", skip_all)]
     pub fn get_battery(&mut self) -> Result<(), String> {
         debug!("querying device");
-
-        let target = &self.handle;
         let mut buf = [0u8; 20];
         
-        self.execute_command(target, Commands::GetBatteryLevel, None)?;
-        let read_buffer = &target.read(&mut buf);
+        debug!("pre-flush queue before read");
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
+        }
+
+        let target = &self.handle;
+        
+        self.execute_command(Commands::GetBatteryLevel, None)?;
+
+        debug!("sleeping for 100ms before reading");
+        sleep(Duration::from_millis(100));
+        let read_buffer = target.read_timeout(&mut buf, 1000);
+
         match read_buffer {
+            Ok(READ_EMPTY) => warn!("reading {} bytes, did the device disconnect?", READ_EMPTY),
             Ok(bytes) => debug!("read {} bytes", bytes),
-            Err(error) => warn!("error: '{}'; failed to read data!", error)
+            Err(error) => warn!("'{}'; failed to read data!", error)
         }
 
         trace!("response: {:?}", buf);
 
         if buf[BATTERY_LEVEL_POS] > 0 {
             self.battery_level = Some(Response::BatteryLevel(buf[BATTERY_LEVEL_POS]));
-            return Ok(())
         } else {
-            return Err("failed to read battery level!".to_string())
+            warn!("unexpected response value, check response buffer")
         }
+
+        debug!("waiting 100ms before flushing packet queue");
+        sleep(Duration::from_millis(100));
+
+        match self.flush_queue(buf) {
+            Ok(_) => {
+                debug!("flushed buffer queue");
+                return Ok(())
+            },
+            Err(error) => {
+                warn!("'{}'; failed to flush queue!", error);
+                return Err("failed to flush queue!".to_string())
+            }
+        }
+        
     }   
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_charging_status(&mut self) -> Result<(), String> {
         debug!("querying device");
+        let mut buf = [0u8; 20];
+
+        debug!("pre-flush queue before read");
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
+        }
 
         let target = &self.handle;
-        let mut buf = [0u8; 20];
-            
-        self.execute_command(target, Commands::GetChargingStatus, None)?;
 
-        let read_buffer = &target.read(&mut buf);
+        self.execute_command(Commands::GetChargingStatus, None)?;
+
+        debug!("sleeping for 100ms before reading");
+        sleep(Duration::from_millis(100));
+        let read_buffer = target.read(&mut buf);
+
         match read_buffer {
+            Ok(READ_EMPTY) => warn!("reading {} bytes, did the device disconnect?", READ_EMPTY),
             Ok(bytes) => debug!("read {} bytes", bytes),
-            Err(error) => debug!("error: '{}'; failed to read data!", error)
+            Err(error) => debug!("'{}'; failed to read data!", error)
         }
 
         trace!("response: {:?}", buf);
@@ -130,40 +177,124 @@ impl HeadsetInfo {
             self.charging_status = Some(Response::ChargingStatus(true));
         } else if buf[4] == 0 {
             self.charging_status = Some(Response::ChargingStatus(false));
+        } else {
+            warn!("unexpected response value, check response buffer")
+        }
+
+        debug!("waiting 100ms before flushing packet queue");
+        sleep(Duration::from_millis(100));
+
+        match self.flush_queue(buf) {
+            Ok(_) => { 
+                debug!("flushed buffer queue");
+                return Ok(())
+            },
+            Err(error) => {
+                warn!("'{}'; failed to flush queue!", error);
+                return Err(format!("'{}'; failed to get charging status!", error))
+            }
+        }
+
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_headset_status(&mut self) -> Result<(), String> {
+        debug!("querying device");
+        let mut buf = [0u8; 20];
+        
+        debug!("pre-flush queue before read");
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
+        }
+
+        let target = &self.handle;
+            
+        self.execute_command(Commands::GetHeadsetStatus, None)?;
+
+        debug!("sleeping for 100ms before reading");
+        sleep(Duration::from_millis(100));
+        let read_buffer = target.read(&mut buf);
+
+        match read_buffer {
+            Ok(READ_EMPTY) => warn!("failed to read, did the device disconnect?"),
+            Ok(bytes) => debug!("read {} bytes", bytes),
+            Err(error) => debug!("'{}'; failed to read data!", error)
+        }
+
+        trace!("response: {:?}", buf);
+
+        if buf[4] == 3 {
+            self.device_status = Some(Response::IsActive(false));
+        } else if buf[4] == 1 || buf[4] == 4 {
+            self.device_status = Some(Response::IsActive(true));
+        } else {
+            warn!("unexpected response value, check response buffer")
+        }
+
+        debug!("waiting 100ms before flushing packet queue");
+        sleep(Duration::from_millis(100));
+
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
         }
 
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
-    pub fn get_headset_status(&mut self) -> Result<(), String> {
+    pub fn get_mic_status(&mut self) -> Result<(), String> {
         debug!("querying device");
+        let mut buf = [0u8; 20];
+
+        debug!("pre-flush queue before read");
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
+        }
 
         let target = &self.handle;
-        let mut buf = [0u8; 20];
             
-        self.execute_command(target, Commands::GetHeadsetStatus, None)?;
+        self.execute_command(Commands::GetMicrophoneStatus, None)?;
 
-        let read_buffer = &target.read(&mut buf);
+        debug!("sleeping for 100ms before reading");
+        sleep(Duration::from_millis(100));
+        let read_buffer = target.read(&mut buf);
+
         match read_buffer {
+            Ok(READ_EMPTY) => warn!("reading {} bytes, did the device disconnect?", READ_EMPTY),
             Ok(bytes) => debug!("read {} bytes", bytes),
-            Err(error) => debug!("error: '{}'; failed to read data!", error)
+            Err(error) => debug!("'{}'; failed to read data!", error)
         }
 
         trace!("response: {:?}", buf);
 
-        if buf[4] == 3 { 
-            self.device_status = Some(Response::IsActive(false));
-        } else if buf[4] == 1 {
-            self.device_status = Some(Response::IsActive(true));
+        if buf[4] == 1 { 
+            self.microphone_status = Some(Response::MicrophoneStatus(false));
+        } else if buf[4] == 0 {
+            self.microphone_status = Some(Response::MicrophoneStatus(true));
+        } else {
+            warn!("unexpected response value, check response buffer")
+        }
+
+        debug!("waiting 100ms before flushing packet queue");
+        sleep(Duration::from_millis(100));
+
+        match self.flush_queue(buf) {
+            Ok(_) => debug!("flushed buffer queue"),
+            Err(error) => warn!("'{}'; failed to flush queue!", error)
         }
 
         Ok(())
     }
 
     // send query/control command
-    #[instrument(level = "trace", skip_all)]
-    pub fn execute_command(&self, target: &HidDevice, command: Commands, param: Option<u8>) -> Result<(), String> {
+    #[instrument(level = "debug", skip_all)]
+    pub fn execute_command(&self, command: Commands, param: Option<u8>) -> Result<(), String> {
+        let target = &self.handle;
+        debug!("sending command to device: {:?}", &command);
+
         let mut buf = [0u8; 20];
         buf[0] = 0x06;
         buf[1] = 0xFF;
@@ -175,38 +306,43 @@ impl HeadsetInfo {
         }
 
         match target.send_output_report(&buf) {
-            Ok(bytes) => {
-                debug!("written bytes");
-                trace!("sent command: {:?}", buf);
+            Ok(()) => {
+                debug!("wrote command to device");
+                trace!("sent command buffer to device: {:?}, sleeping 100ms", buf);
+                sleep(Duration::from_millis(100));
                 return Ok(())
             }
             Err(write_error) => {
-                warn!("failed to write data to headset!");
-                return Err(format!("error: '{}'; failed to write data!", write_error))
+                warn!("failed to write data to device!");
+                return Err(format!("'{}'; failed to write data to device!", write_error))
             }
         }
 
     }
+
     #[instrument(level = "trace", skip_all)]    
     pub fn on_connect_info(&mut self) {
         loop {
-            sleep(Duration::from_millis(100));
             self.get_battery();
             match &self.battery_level {
                 Some(level) => info!("{}", level),
                 None => ()
             }
 
-            sleep(Duration::from_millis(100));
             self.get_charging_status();
             match &self.charging_status {
                 Some(status) => info!("{}", status),
                 None => ()
             }
 
-            sleep(Duration::from_millis(100));
             self.get_headset_status();
             match &self.device_status {
+                Some(status) => info!("{}", status),
+                None => ()
+            }
+
+            self.get_mic_status();
+            match &self.microphone_status {
                 Some(status) => info!("{}", status),
                 None => ()
             }
@@ -217,16 +353,15 @@ impl HeadsetInfo {
         
     }
 
-    #[instrument(skip_all)]
-    pub fn get_handle() -> Result<HidDevice, String> {
-        let mut api = hidapi::HidApi::new().map_err(|_| "hidapi failed to initialize!")?;
-        
+    #[instrument(level = "debug", skip_all)]
+    pub fn get_handle(api: &mut HidApi) -> Result<HidDevice, String> {
         let mut retry_count: u8 = 0;
+        let mut retry_sec: u8;
 
-        while retry_count < 11 {
+        loop {
             match api.refresh_devices() {
                 Ok(_) => debug!("refreshed devices"),
-                Err(error) => error!("error: '{}'; failed to refresh for devices!", error)
+                Err(error) => error!("'{}'; failed to refresh for devices!", error)
             }
 
             let target = api.device_list().find(|&target| {
@@ -236,22 +371,33 @@ impl HeadsetInfo {
             });
 
             match target {
-                None => warn!("no matching device found, retrying.."),
+                None => {
+                    if retry_count < 255 {
+                        warn!("attempt: #{}, no matching device found. retrying...", retry_count);
+                    } else {
+                        warn!("no matching device found. retrying...");
+                    }
+                },
                 Some(target) => match target.open_device(&api) {
                     Ok(device) => {
                         debug!("got device handle successfully");
                         return Ok(device)
                     },
-                    Err(error) => warn!("error: '{}'; failed to open device!, retrying..", error),
+                    Err(error) => warn!("'{}'; failed to open device!", error),
                 }
             }
+            
+            retry_sec = match retry_count {
+                0..=4 => 2,
+                5..=9 => 5,
+                10..=20 => 10,
+                _ => 60
+            };
 
-            debug!("attempts left: {}", 10 - retry_count);
-            retry_count += 1;
-            sleep(Duration::from_secs(2));
+            debug!("sleeping for {} seconds", retry_sec);
+        
+            retry_count = retry_count.saturating_add(1);
         }
-
-        Err("device timed out! is usb connected?".to_string())
     }
     
     #[instrument(level = "trace", skip_all)]
@@ -274,6 +420,36 @@ impl HeadsetInfo {
             }
             Err(error) => warn!("error: '{}'; failed to read metadata!", error)
         }
+    }
+
+    #[instrument(level = "trace", skip_all)]
+    pub fn flush_queue(&self, mut buf: [u8; 20]) -> Result<(), String> {
+        let target = &self.handle;
+        match target.set_blocking_mode(false) {
+            Ok(_) => debug!("set the device to non-blocking mode"),
+            Err(error) => warn!("'{}'; failed to set the device to non-block mode!", error)
+        }
+
+        loop {
+            match target.read(&mut buf) {
+                Ok(READ_EMPTY) => 
+                {   
+                    debug!("successfully flushed queue. reading {} bytes", READ_EMPTY);
+                    match target.set_blocking_mode(true) {
+                        Ok(_) => {
+                            debug!("reset the device to blocking mode");
+                            break
+                        },
+                        Err(error) => warn!("'{}'; failed to reset the device to blocking mode!", error)
+                        
+                    }
+                },
+                Ok(bytes) => trace!("flushing queue, reading {} bytes", bytes),
+                Err(error) => error!("'{}'; failed to flush queue!", error)
+            }
+        }
+        
+        Ok(())
     }
 }
 
