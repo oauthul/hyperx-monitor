@@ -1,37 +1,34 @@
 mod hardware;
+mod ui;
 
 use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
 use tracing::{info, debug, error, warn, trace, Level, subscriber};
 use tracing_subscriber::{FmtSubscriber, EnvFilter, fmt, prelude::*, registry::Registry};
-use hardware::{Response, HeadsetInfo};
+use hardware::{Response, HeadsetInfo, Commands};
+use clap::Parser;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::env;
 
-fn main() {
-    let mut hidapi = hidapi::HidApi::new();
+fn init_device() -> Result<HeadsetInfo, String> {
+    let mut api = hidapi::HidApi::new()
+        .map_err(|error| format!("error occurred while making hidapi instance: {error}"))?;
 
-    logger_setup();
+    let mut device = HeadsetInfo::new(&mut api)
+        .map_err(|error| format!("error occurred while making device instance: {error}"))?;
 
-    let (s,r) = unbounded::<Response>();
-    let mut device: HeadsetInfo;
-    if let Ok(mut api) = hidapi {
-        match HeadsetInfo::new(&mut api) {
-            Ok(headsetinfo) => device = headsetinfo,
-            Err(error) => panic!("'{}'; failed to get handle! panicking!", error)
-        }
+    device.about_device()
+        .map_err(|error| format!("error occurred while getting device info: {error}"))?;
+    debug!("successfully got device information");
 
-        device.about_device();
-        device.on_connect_info();
-    }
+    device.query_device()
+        .map_err(|error| format!("error occurred while querying device: {error}"))?;
+    debug!("successfully queried device");
 
-    match r.recv() {
-        Ok(_) => (),
-        Err(_) => ()
-    };
-
+    info!("successfully initialized device!");
+    Ok(device)
 }
 
 fn logger_setup() {
@@ -44,15 +41,32 @@ fn logger_setup() {
                                         .max_level_hint();
 
     let subscriber = Registry::default()
-        .with(formatter)
-        .with(environment);
+                            .with(formatter)
+                            .with(environment);
 
     let logging = subscriber::set_global_default(subscriber);
 
     match logging {
         Ok(_) => if let Some(level) = environment {
-            println!("logging enabled, current verbosity level: {}", level.to_string().to_uppercase())
+            println!("logging enabled. current verbosity level: {}", level.to_string().to_uppercase());
+            if cfg!(unix) { warn!("unix system detected, device information may be inaccurate") }
         },
-        Err(error) => eprintln!("'{}'; failed to initialize logging!", error) 
+        Err(error) => eprintln!("failed to initialize logging: {}", error)
     }
+}
+
+fn main() {
+    logger_setup();
+    let mut device = init_device().expect("error occurred while initializing device!");
+    spawn(move || { device.listen_for_updates() });
+
+    // ui::main();
+
+    let (s,r) = unbounded::<Response>();
+
+    match r.recv() {
+        Ok(_) => (),
+        Err(_) => ()
+    }
+
 }
