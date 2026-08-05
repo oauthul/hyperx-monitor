@@ -1,104 +1,72 @@
 mod hardware;
+mod ui;
 
 use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
-use tracing::{info, debug, error, warn, Level};
-use tracing_subscriber::FmtSubscriber;
-use hardware::{Response, HeadsetInfo};
+use tracing::{info, debug, error, warn, trace, Level, subscriber};
+use tracing_subscriber::{FmtSubscriber, EnvFilter, fmt, prelude::*, registry::Registry};
+use hardware::{Response, HeadsetInfo, Commands};
+use clap::Parser;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::env;
 
-fn main() {
-    logger_setup();    
+fn init_device() -> Result<HeadsetInfo, String> {
+    let mut api = hidapi::HidApi::new()
+        .map_err(|error| format!("error occurred while making hidapi instance: {error}"))?;
 
-    let mut headset = HeadsetInfo::default();
+    let mut device = HeadsetInfo::new(&mut api)
+        .map_err(|error| format!("error occurred while making device instance: {error}"))?;
 
-    loop {
-        match get_handles(&mut headset) {
-            Ok(_) => { 
-                info!("got all handles!");
-                about_device(headset.default_handle.as_ref());
-                break 
-            },
-            Err(e) => {
-                warn!("usb is not plugged in/udev rules not set up correctly!");
-                error!("error: {}", e);
-                sleep(Duration::from_secs(3));
-            }
-        }
-    }
-    debug!("looping battery check, finishing at timeout = 5");
-    spawn(move || {
-        let mut timeout: u16 = 0;
-        loop {
-            debug!("timeout: {}", timeout);
-            if timeout == 5 {
-                debug!("loop stopping");
-                break
-            }
-            match headset.get_battery() {
-                Some(response) => info!("{}", response),
-                None => ()
-            };
-            sleep(Duration::from_secs(2));
-            timeout += 1;
-        }
-    });
+    device.about_device()
+        .map_err(|error| format!("error occurred while getting device info: {error}"))?;
+    debug!("successfully got device information");
 
-    let mut headset_chg = HeadsetInfo::default();
-    let _ = get_handles(&mut headset_chg);
+    device.query_device()
+        .map_err(|error| format!("error occurred while querying device: {error}"))?;
+    debug!("successfully queried device");
 
-    spawn(move || {
-        debug!("spawning charging monitor");
-        headset_chg.charging_monitor()
-    });
-
-    let (s, r) = unbounded::<Response>();
-
-    match r.recv() {
-        Ok(resp) => debug!("response: {}", resp),
-        Err(_) => ()
-    }
-}
-
-fn get_handles(headset: &mut HeadsetInfo) -> Result<(), &'static str> {
-    let api = hidapi::HidApi::new();
-
-    headset.default_handle = HeadsetInfo::get_default_handle(&api);
-    headset.status_handle = HeadsetInfo::get_status_handle(&api);
-
-    debug!("get default handle.. {}", if headset.default_handle.is_some() { "ok" } else { "error" } );
-    debug!("get status handle.. {}", if headset.status_handle.is_some() { "ok" } else { "error" } );
-
-    if headset.default_handle.is_none() || headset.status_handle.is_none() {
-        Err("failed to get all handles!")
-    } else {
-        Ok(())
-    }
+    info!("successfully initialized device!");
+    Ok(device)
 }
 
 fn logger_setup() {
-    let subscriber = FmtSubscriber::builder()
-                    .with_max_level(Level::TRACE)
+    let formatter = fmt::layer()
                     .with_thread_names(true)
-                    .finish();
-    let logging = tracing::subscriber::set_global_default(subscriber);
+                    .with_target(false);
+
+    let environment = EnvFilter::builder().with_default_directive(Level::INFO.into())
+                                        .from_env_lossy()
+                                        .max_level_hint();
+
+    let subscriber = Registry::default()
+                            .with(formatter)
+                            .with(environment);
+
+    let logging = subscriber::set_global_default(subscriber);
+
     match logging {
-        Ok(_) => debug!("logging active"),
-        Err(log_init_err) => error!("failed to initialize event logger! error: {}", log_init_err)
+        Ok(_) => if let Some(level) = environment {
+            println!("logging enabled. current verbosity level: {}", level.to_string().to_uppercase());
+            if cfg!(unix) { warn!("unix system detected, device information may be inaccurate") }
+        },
+        Err(error) => eprintln!("failed to initialize logging: {}", error)
     }
 }
 
-fn about_device(api: Option<&HidDevice>) {
-    if let Some(api) = api {
-        match api.get_device_info() {
-            Ok(info) => {
-                info!("successfully connected to {}!", info.product_string().expect("connected to unknown device. check your headset drivers."));
-                debug!("manufacturer name: {}", info.manufacturer_string().expect("connected to unknown device. check your headset drivers."));
-                debug!("vid/pid: {:#X}, {:#X}", info.vendor_id(), info.product_id());
-            }
-            Err(e) => warn!("getting device info failed! err: {}", e)
-        }
-    }
-}
+fn main() {
+    logger_setup();
+    let mut device = init_device().expect("error occurred while initializing device!");
+    spawn(move || { device.listen_for_updates() });
 
+    // ui::main();
+
+    let (s,r) = unbounded::<Response>();
+
+    match r.recv() {
+        Ok(_) => (),
+        Err(_) => ()
+    }
+
+}
