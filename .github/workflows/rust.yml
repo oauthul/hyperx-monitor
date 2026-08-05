@@ -2,11 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: [ "refactor" ]
+    branches: [ "main" ]
     paths:
       - 'src/**'
   pull_request:
-    branches: [ "refactor" ]
+    branches: [ "main" ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,9 +18,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Install dependencies
+    - name: install deps
       run: sudo apt update && sudo apt-get install libudev-dev libgtk-3-dev libxdo-dev libappindicator3-dev
-    - name: Check
+    - name: check package
       run: cargo check
-    - name: Build binary
+    - name: build binary
       run: cargo build --verbose
