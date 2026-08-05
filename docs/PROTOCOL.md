@@ -1,10 +1,10 @@
 # Protocol Documentation
-This documentation will try to explain the protocol between the Cloud Stinger 2 Wireless and the computer as much as possible.\
+This documentation will try to explain the protocol between the Cloud Stinger 2 Wireless and the computer as much as possible.<br>
 Looking for the list of [commands](../docs/COMMANDS.md)?
 
 > [!NOTE]
-> I am not affiliated with HyperX, nor do I have a qualifying degree to say for certain I know what I'm doing.\
-> The following is my own interpretation of how the commands are structured.\
+> I am not affiliated with HyperX, nor do I have a qualifying degree to say for certain I know what I'm doing.<br>
+> The following is my own interpretation of how the commands are structured.<br>
 > Please take this with a pinch of salt if you are to use this as a reference.
 
 ## Base Command
@@ -20,12 +20,12 @@ The default structure for each packet is:
 |3|COMMAND|Request/Response|
 |4|PARAMETER|Request/Response|
 
-``COMMAND`` is the type of command being sent/received as an integer or as hexadecimal.\
+``COMMAND`` is the type of command being sent/received as an integer or as hexadecimal.<br>
 ``PARAMETER`` is the parameter being sent/received as an integer or as hexadecimal.
 
 ## Sending a Request
-You can send a request by sending an output report to the device.\
-Sending a command is pretty straightforward. Modify the base command as necessary to request/set as you please.\
+You can send a request by sending an output report to the device.<br>
+Sending a command is pretty straightforward. Modify the base command as necessary to request/set as you please.<br>
 For example, to get the microphone status, send:
 
 ``[0x06, 0xFF, 0xBB, 0x05]``.
