@@ -50,13 +50,14 @@ fn logger_setup() {
 fn main() {
     logger_setup();
 
-    if let Ok(temp) = HeadsetInfo::new() {
-        let _ = temp.about_device();
-    }
-
     spawn(move || {
         let mut retry_count: u8 = 0;
         let mut retry_sec: u64;
+
+        // Attempt to print device information
+        if let Ok(temp) = HeadsetInfo::new() {
+            let _ = temp.about_device();
+        }
 
         'keep_alive: loop {
             info!("trying to connect to headset...");
@@ -83,7 +84,7 @@ fn main() {
 
             info!("device ready!");
             if let Err(error) = device.listen_for_updates() {
-                error!("unexpected error occurred: {}. attempting to re-initialize...", error);
+                error!("{}. attempting to re-initialize...", error);
             }
 
             hardware::sleep_sec(2);

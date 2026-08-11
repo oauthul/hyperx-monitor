@@ -25,9 +25,15 @@ pub fn sleep_sec(sec: u64) {
     sleep(Duration::from_secs(sec))
 }
 
-macro_rules! test_command {
+macro_rules! execute {
     ($self:ident, $field:ident, $command:expr) => {
         let $field = $self.query($command, None)?;
+        info!("{}", $field);
+        $self.$field = Some($field)
+    };
+
+    ($self:ident, $field:ident, $command:expr, $value:expr) => {
+        let $field = $self.query($command, $value)?;
         info!("{}", $field);
         $self.$field = Some($field)
     }
@@ -103,43 +109,43 @@ impl Commands {
             Self::GetChargingStatus => match resp {
                 1 => Ok(Response::ChargingStatus(true)),
                 0 => Ok(Response::ChargingStatus(false)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetHeadsetStatus => match resp {
                 1 => Ok(Response::IsActive(true)),
                 4 => Ok(Response::IsActive(true)),
                 3 => Ok(Response::IsActive(false)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetBatteryLevel => match resp {
                 1..=100 => Ok(Response::BatteryLevel(resp)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetMicrophoneStatus => match resp {
                 1 => Ok(Response::MicrophoneStatus(false)),
                 0 => Ok(Response::MicrophoneStatus(true)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetNoiseGateStatus => match resp {
                 1 => Ok(Response::NoiseGateStatus(false)),
                 0 => Ok(Response::NoiseGateStatus(true)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetSidetoneStatus => match resp {
                 1 => Ok(Response::SidetoneStatus(true)),
                 0 => Ok(Response::SidetoneStatus(false)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::SetSidetoneStatus => match resp {
                 1 => Ok(Response::SidetoneStatus(true)),
                 0 => Ok(Response::SidetoneStatus(false)),
-                _ => return Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
+                _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
             Self::GetSidetoneVolume => match resp {
@@ -201,7 +207,7 @@ pub struct HeadsetInfo {
     pub shutdown_time: Option<Response>
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Response {
     BatteryLevel(u8),
     ChargingStatus(bool),
@@ -284,6 +290,46 @@ impl HeadsetInfo {
         Ok(resp)
     }
 
+    #[instrument(level = "trace", skip_all)]
+    pub fn flush_queue(&self, mut buf: [u8; 20]) -> Result<(), HeadsetError> {
+        match self.handle.set_blocking_mode(false) {
+            Ok(_) => debug!("set the device to non-blocking mode"),
+            Err(error) => {
+                warn!("error occurred while setting blocking mode: {}", error);
+                return Err(HeadsetError::HidApiError { msg: error.to_string() })
+            }
+        }
+
+        loop {
+            match self.handle.read(&mut buf) {
+                Ok(READ_EMPTY) => 
+                {   
+                    trace!("read_empty state: {:?}", buf);
+                    debug!("successfully flushed queue");
+                    match self.handle.set_blocking_mode(true) {
+                        Ok(_) => {
+                            debug!("reset the device to blocking mode");
+                            trace!("breaking from flush queue loop");
+                            break
+                        },
+                        Err(error) => { 
+                            warn!("error occurred while setting blocking mode: {}", error);
+                            return Err(HeadsetError::HidApiError { msg: error.to_string() })
+                        }   
+                        
+                    }
+                },
+                Ok(bytes) => { 
+                    trace!("buffer: {:?}, reading {} bytes", buf, bytes);
+                },
+                Err(error) => return Err(HeadsetError::HidApiError { msg: error.to_string() })
+            }
+        }
+
+        Ok(())
+    }
+
+
     #[instrument(level = "debug", skip_all)]
     pub fn execute_command(&self, command: Commands, param: Option<u8>) -> Result<(), HeadsetError> {
         debug!("sending command to device: {:?}", &command);
@@ -303,10 +349,10 @@ impl HeadsetInfo {
                 debug!("wrote command to device");
                 trace!("sent command buffer to device: {:?}", buf);
                 sleep_ms(50);
-                return Ok(())
+                Ok(())
             }
             Err(error) => {
-                return Err(HeadsetError::HidApiError { msg: error.to_string() })
+                Err(HeadsetError::HidApiError { msg: error.to_string() })
             }
         }
 
@@ -314,15 +360,15 @@ impl HeadsetInfo {
 
     #[instrument(level = "trace", skip_all)]
     pub fn query_device(&mut self) -> Result<(), HeadsetError> {
-        test_command!(self, battery_level, Commands::GetBatteryLevel);
-        test_command!(self, headset_status, Commands::GetHeadsetStatus);
-        test_command!(self, charging_status, Commands::GetChargingStatus);
-        test_command!(self, microphone_status, Commands::GetMicrophoneStatus);
-        test_command!(self, shutdown_time, Commands::GetAutoShutdownTime);
-        test_command!(self, sidetone_status, Commands::GetSidetoneStatus);
-        test_command!(self, sidetone_volume, Commands::GetSidetoneVolume);
-        test_command!(self, noisegate_status, Commands::GetNoiseGateStatus);
-
+        execute!(self, battery_level, Commands::GetBatteryLevel);
+        execute!(self, headset_status, Commands::GetHeadsetStatus);
+        execute!(self, charging_status, Commands::GetChargingStatus);
+        execute!(self, microphone_status, Commands::GetMicrophoneStatus);
+        execute!(self, shutdown_time, Commands::GetAutoShutdownTime);
+        execute!(self, sidetone_status, Commands::GetSidetoneStatus);
+        execute!(self, sidetone_volume, Commands::GetSidetoneVolume);
+        execute!(self, noisegate_status, Commands::GetNoiseGateStatus);
+        
         Ok(())
     }
 
@@ -340,69 +386,36 @@ impl HeadsetInfo {
         });
 
         match target {
-            None => return Err(HeadsetError::GetHandleError),
+            None => Err(HeadsetError::GetHandleError),
             Some(target) => match target.open_device(&api) {
                 Ok(device) => {
                     debug!("got device handle successfully");
-                    return Ok(device)
+                    Ok(device)
                 },
-                Err(error) => return Err(HeadsetError::HidApiError { msg: error.to_string() }),
+                Err(error) => Err(HeadsetError::HidApiError { msg: error.to_string() }),
             }
         }
     }
     
     #[instrument(level = "trace", skip_all)]
     pub fn about_device(&self) -> Result<(), HeadsetError> {
-        info!("welcome to hyperx-monitor!");
         debug!("grabbing device information");
 
         match self.handle.get_device_info() {
             Ok(info) => {
-                debug!("{:-^60}", " device information from hidapi ");
-                debug!("{:<27} {}", "product name:", info.product_string().unwrap_or("unknown"));
-                debug!("{:<27} {:#X}", "usage page:", info.usage_page());
-                debug!("{:<27} {:#X}", "usage:", info.usage());
-                debug!("{:<27} {:#X}", "vendor id:", info.vendor_id());
-                debug!("{:<27} {:#X}", "product id:", info.product_id());
-                debug!("{:<27} {:?}", "connection:", info.bus_type());
-                debug!("{:<27} {}", "connected interface:", info.interface_number());
-                debug!("{:-^60}", " end of info ");
-                return Ok(())
+                info!("{:-^60}", " device information from hidapi ");
+                info!("{:<27} {}", "product name:", info.product_string().unwrap_or("unknown"));
+                info!("{:<27} {:#X}", "usage page:", info.usage_page());
+                info!("{:<27} {:#X}", "usage:", info.usage());
+                info!("{:<27} {:#X}", "vendor id:", info.vendor_id());
+                info!("{:<27} {:#X}", "product id:", info.product_id());
+                info!("{:<27} {:?}", "connection:", info.bus_type());
+                info!("{:<27} {}", "connected interface:", info.interface_number());
+                info!("{:-^60}", " end of info ");
+                Ok(())
             }
-            Err(error) => return Err(HeadsetError::HidApiError { msg: error.to_string() })
+            Err(error) => Err(HeadsetError::HidApiError { msg: error.to_string() })
         }
-    }
-
-    #[instrument(level = "trace", skip_all)]
-    pub fn flush_queue(&self, mut buf: [u8; 20]) -> Result<(), HeadsetError> {
-        match self.handle.set_blocking_mode(false) {
-            Ok(_) => debug!("set the device to non-blocking mode"),
-            Err(error) => warn!("error occurred while setting blocking mode: {}", error)
-        }
-
-        loop {
-            match self.handle.read(&mut buf) {
-                Ok(READ_EMPTY) => 
-                {   
-                    trace!("buffer: {:?}", buf);
-                    debug!("successfully flushed queue");
-                    match self.handle.set_blocking_mode(true) {
-                        Ok(_) => {
-                            debug!("reset the device to blocking mode");
-                            break
-                        },
-                        Err(error) => warn!("error occurred while setting blocking mode: {}", error)
-                        
-                    }
-                },
-                Ok(bytes) => { 
-                    trace!("buffer: {:?}, reading {} bytes, trying to read until {} bytes", buf, bytes, READ_EMPTY);
-                },
-                Err(error) => return Err(HeadsetError::HidApiError { msg: error.to_string() })
-            }
-        }
-
-        Ok(())
     }
 
     pub fn listen_for_updates(&mut self) -> Result<(), HeadsetError> {
@@ -414,7 +427,18 @@ impl HeadsetInfo {
                 Ok(READ_EMPTY) => (),
                 Ok(_) => {
                     if let Ok(resp) = Commands::parse(&buf) {
-                        debug!("response detected: {:?}", resp);
+                        info!("{}", resp);
+
+                        match resp {
+                            Response::BatteryLevel(_) => self.battery_level = Some(resp),
+                            Response::ChargingStatus(_) => self.charging_status = Some(resp),
+                            Response::IsActive(_) => self.headset_status = Some(resp),
+                            Response::AutoShutdownTime(_) => self.shutdown_time = Some(resp),
+                            Response::SidetoneStatus(_) => self.sidetone_status = Some(resp),
+                            Response::SidetoneVolume(_) => self.sidetone_volume = Some(resp),
+                            Response::NoiseGateStatus(_) => self.noisegate_status = Some(resp),
+                            Response::MicrophoneStatus(_) => self.microphone_status = Some(resp),
+                        };
 
                         if resp == Response::IsActive(false) {
                             trace!("device disconnected!")
@@ -434,99 +458,88 @@ impl HeadsetInfo {
     #[instrument(level = "debug", skip_all)]
     pub fn get_battery(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let battery_level = self.query(Commands::GetBatteryLevel, None)?;
-        info!("{}", battery_level);
-        self.battery_level = Some(battery_level);
+        execute!(self, battery_level, Commands::GetBatteryLevel);
+
         Ok(())
     }   
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_charging_status(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let charging_status = self.query(Commands::GetChargingStatus, None)?;
-        info!("{}", charging_status);
-        self.charging_status = Some(charging_status);
+        execute!(self, charging_status, Commands::GetChargingStatus);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_headset_status(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let headset_status = self.query(Commands::GetHeadsetStatus, None)?;
-        info!("{}", headset_status);
-        self.headset_status = Some(headset_status);
+        execute!(self, headset_status, Commands::GetHeadsetStatus);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_mic_status(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let microphone_status = self.query(Commands::GetMicrophoneStatus, None)?;
-        info!("{}", microphone_status);
-        self.microphone_status = Some(microphone_status);
+        execute!(self, microphone_status, Commands::GetMicrophoneStatus);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_shutdown_time(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let shutdown_time = self.query(Commands::GetAutoShutdownTime, None)?;
-        info!("{}", shutdown_time);
-        self.shutdown_time = Some(shutdown_time);
+        execute!(self, shutdown_time, Commands::GetAutoShutdownTime);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_sidetone_status(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let sidetone_status = self.query(Commands::GetSidetoneStatus, None)?;
-        info!("{}", sidetone_status);
-        self.sidetone_status = Some(sidetone_status);
+        execute!(self, sidetone_status, Commands::GetSidetoneStatus);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_sidetone_volume(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let sidetone_volume = self.query(Commands::GetSidetoneVolume, None)?;
-        info!("{}", sidetone_volume);
-        self.sidetone_volume = Some(sidetone_volume);
+        execute!(self, sidetone_volume, Commands::GetSidetoneVolume);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn get_noisegate_status(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let noisegate_status = self.query(Commands::GetNoiseGateStatus, None)?;
-        info!("{}", noisegate_status);
-        self.noisegate_status = Some(noisegate_status);
+        execute!(self, noisegate_status, Commands::GetNoiseGateStatus);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn set_shutdown_time(&mut self, time: Option<u8>) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let shutdown_time = self.query(Commands::SetAutoShutdownTime, time)?;
-        info!("{}", shutdown_time);
-        self.shutdown_time = Some(shutdown_time);
+        execute!(self, shutdown_time, Commands::SetAutoShutdownTime, time);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn set_sidetone_status(&mut self, status: Option<u8>) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let sidetone_status = self.query(Commands::SetSidetoneStatus, status)?;
-        info!("{}", sidetone_status);
-        self.sidetone_status = Some(sidetone_status);
+        execute!(self, sidetone_status, Commands::SetSidetoneStatus, status);
+
         Ok(())
     }
 
     #[instrument(level = "debug", skip_all)]
     pub fn set_sidetone_volume(&mut self, volume: Option<u8>) -> Result<(), HeadsetError> {
         debug!("querying device");
-        let sidetone_volume = self.query(Commands::SetSidetoneVolume, volume)?;
-        info!("{}", sidetone_volume);
-        self.sidetone_volume = Some(sidetone_volume);
+        execute!(self, sidetone_volume, Commands::SetSidetoneVolume, volume);
+
         Ok(())
     }
 
