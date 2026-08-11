@@ -431,7 +431,7 @@ impl HeadsetInfo {
     }
 
     // Usable commands for command line arguments
-        #[instrument(level = "debug", skip_all)]
+    #[instrument(level = "debug", skip_all)]
     pub fn get_battery(&mut self) -> Result<(), HeadsetError> {
         debug!("querying device");
         let battery_level = self.query(Commands::GetBatteryLevel, None)?;
