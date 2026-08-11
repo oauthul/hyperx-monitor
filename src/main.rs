@@ -5,26 +5,18 @@ use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
 use tracing::{info, debug, error, warn, trace, Level, subscriber};
 use tracing_subscriber::{FmtSubscriber, EnvFilter, fmt, prelude::*, registry::Registry};
-use hardware::{Response, HeadsetInfo, Commands};
+use hardware::{Response, HeadsetInfo, Commands, HeadsetError};
 use clap::Parser;
 use std::thread::{sleep, spawn};
 use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::env;
 
-fn init_device() -> Result<HeadsetInfo, String> {
-    let mut api = hidapi::HidApi::new()
-        .map_err(|error| format!("error occurred while making hidapi instance: {error}"))?;
 
-    let mut device = HeadsetInfo::new(&mut api)
-        .map_err(|error| format!("error occurred while making device instance: {error}"))?;
+fn init_device() -> Result<HeadsetInfo, HeadsetError> {
+    let mut device = HeadsetInfo::new()?;
 
-    device.about_device()
-        .map_err(|error| format!("error occurred while getting device info: {error}"))?;
-    debug!("successfully got device information");
-
-    device.query_device()
-        .map_err(|error| format!("error occurred while querying device: {error}"))?;
+    device.query_device()?;
     debug!("successfully queried device");
 
     info!("successfully initialized device!");
@@ -57,8 +49,46 @@ fn logger_setup() {
 
 fn main() {
     logger_setup();
-    let mut device = init_device().expect("error occurred while initializing device!");
-    spawn(move || { device.listen_for_updates() });
+
+    if let Ok(temp) = HeadsetInfo::new() {
+        let _ = temp.about_device();
+    }
+
+    spawn(move || {
+        let mut retry_count: u8 = 0;
+        let mut retry_sec: u64;
+
+        'keep_alive: loop {
+            info!("trying to connect to headset...");
+
+            let mut device = match init_device() {
+                Ok(device) => {
+                    retry_count = 0;
+                    device
+                },
+                Err(error) => {
+                    retry_sec = match retry_count {
+                        0..=4 => 2,
+                        5..=9 => 5,
+                        10..=20 => 10,
+                        _ => 60
+                    };
+                    error!("device initialization failed: {} attempt: #{}, delay until next attempt: {} sec(s)", error, retry_count, retry_sec);
+                    hardware::sleep_sec(retry_sec);
+                    retry_count = retry_count.saturating_add(1);
+
+                    continue 'keep_alive;
+                }
+            };
+
+            info!("device ready!");
+            if let Err(error) = device.listen_for_updates() {
+                error!("unexpected error occurred: {}. attempting to re-initialize...", error);
+            }
+
+            hardware::sleep_sec(2);
+        }
+    });
 
     // ui::main();
 
