@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use clap::{Subcommand};
 use std::thread::sleep;
 use std::time::Duration;
-use crossbeam_channel::unbounded;
+use crossbeam_channel::{unbounded, Sender, Receiver};
+use crate::{ThreadMessage, sleep_ms, sleep_sec,ThreadMessage::HeadsetResponse};
 
 pub const USAGE_PAGE: u16 = 0xFF90;
 pub const VENDOR_ID: u16 = 0x03F0;
@@ -16,14 +17,6 @@ pub const COMMAND_POS: usize = 3;
 pub const READ_SUCCESS: u8 = 20;
 pub const READ_EMPTY: usize = 0;
 pub const READ_EMPTY_U8: u8 = 0;
-
-pub fn sleep_ms(ms: u64) {
-    sleep(Duration::from_millis(ms))
-}
-
-pub fn sleep_sec(sec: u64) {
-    sleep(Duration::from_secs(sec))
-}
 
 macro_rules! execute {
     ($self:ident, $field:ident, $command:expr) => {
@@ -36,6 +29,21 @@ macro_rules! execute {
         let $field = $self.query($command, $value)?;
         info!("{}", $field);
         $self.$field = Some($field)
+    }
+}
+
+macro_rules! send_to_gui {
+    ($self:ident, $field:ident, $sender:ident) => {
+        if let Some(resp) = $self.$field 
+        {
+            match $sender.send(ThreadMessage::HeadsetResponse(resp)) {
+                Ok(_) => trace!("sending '{:?}' to gui thread", resp),
+                Err(error) => {
+                    warn!("failed to send data to gui! {}", error);
+                    return Err(HeadsetError::SendToGuiFail { attempted_data: resp })
+                }
+            }
+        }
     }
 }
 
@@ -172,10 +180,11 @@ impl Commands {
 #[derive(Debug, PartialEq)]
 pub enum HeadsetError {
     Disconnected,
+    SendToGuiFail { attempted_data: Response },
     WriteError,
     ReadError { read: u8 },
     HidApiError { msg: String },
-    GetHandleError,
+    EmptyHandle,
     FlushError,
     ParseError { msg: String }
 }
@@ -183,11 +192,12 @@ pub enum HeadsetError {
 impl fmt::Display for HeadsetError {
     fn fmt(&self, formatting: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            Self::SendToGuiFail { attempted_data } => write!(formatting, "failed to send data to gui thread!"),
             Self::Disconnected => write!(formatting, "device disconnected!"),
             Self::WriteError => write!(formatting, "failed to write to device!"),
             Self::ReadError { read } => write!(formatting, "failed to read data! expected: {}, got: {}", READ_SUCCESS, read),
             Self::HidApiError { msg } => write!(formatting, "hidapi error occurred, msg: {}", msg),
-            Self::GetHandleError => write!(formatting, "failed to get device handle!"),
+            Self::EmptyHandle => write!(formatting, "no matching usb device found!"),
             Self::FlushError => write!(formatting, "failed to flush queue!"),
             Self::ParseError { msg } => write!(formatting, "failed to parse buffer! msg: {}", msg)
         }
@@ -257,7 +267,7 @@ impl HeadsetInfo {
     #[instrument(level = "debug", skip_all)]
     pub fn query(&mut self, command: Commands, param: Option<u8>) -> Result<Response, HeadsetError> {
         let mut buf = [0u8; 20];
-        let mut timeout: u8 = 1;
+        let mut timeout: u8 = 0;
         self.flush_queue(buf)?;
         self.execute_command(command, param)?;
         sleep_ms(100);
@@ -267,11 +277,11 @@ impl HeadsetInfo {
             match read {
                 Ok(READ_EMPTY) => {
                     trace!("reading no data from device. attempt: #{}", timeout);
-                    if timeout == 5 {
+                    timeout += 1;
+                    if timeout == 2 {
                         trace!("reading {} bytes, device may be disconnected", READ_EMPTY);
                         return Err(HeadsetError::Disconnected)
                     }
-                    timeout += 1;
                 },
                 Ok(bytes) => {
                     debug!("read {} bytes", bytes);
@@ -282,7 +292,7 @@ impl HeadsetInfo {
         }
         
 
-        trace!("response: {:?}", buf);
+        trace!(response = ?buf);
         let resp = Commands::parse(&buf)?;
         sleep_ms(100);
         self.flush_queue(buf)?;
@@ -292,6 +302,8 @@ impl HeadsetInfo {
 
     #[instrument(level = "trace", skip_all)]
     pub fn flush_queue(&self, mut buf: [u8; 20]) -> Result<(), HeadsetError> {
+        trace!("attempting to set device to non-blocking mode");
+
         match self.handle.set_blocking_mode(false) {
             Ok(_) => debug!("set the device to non-blocking mode"),
             Err(error) => {
@@ -304,12 +316,13 @@ impl HeadsetInfo {
             match self.handle.read(&mut buf) {
                 Ok(READ_EMPTY) => 
                 {   
-                    trace!("read_empty state: {:?}", buf);
-                    debug!("successfully flushed queue");
+                    trace!(buffer = ?buf);
+                    debug!("successfully flushed buffer queue");
+                    trace!("attempting to set device to blocking mode");
                     match self.handle.set_blocking_mode(true) {
                         Ok(_) => {
                             debug!("reset the device to blocking mode");
-                            trace!("breaking from flush queue loop");
+                            trace!("stopping buffer queue flush");
                             break
                         },
                         Err(error) => { 
@@ -320,7 +333,7 @@ impl HeadsetInfo {
                     }
                 },
                 Ok(bytes) => { 
-                    trace!("buffer: {:?}, reading {} bytes", buf, bytes);
+                    trace!(buffer = ?buf, bytes_read = bytes);
                 },
                 Err(error) => return Err(HeadsetError::HidApiError { msg: error.to_string() })
             }
@@ -332,22 +345,22 @@ impl HeadsetInfo {
 
     #[instrument(level = "debug", skip_all)]
     pub fn execute_command(&self, command: Commands, param: Option<u8>) -> Result<(), HeadsetError> {
-        debug!("sending command to device: {:?}", &command);
+        trace!(command = ?command, param = param, "called execute method");
 
         let mut buf = [0u8; 20];
         buf[0] = 0x06; // Report ID
-        buf[1] = 0xFF; // Placeholder
-        buf[2] = 0xBB; // Placeholder
+        buf[1] = 0xFF; // Constant
+        buf[2] = 0xBB; // Constant
         buf[COMMAND_POS] = command as u8;
 
         if let Some(value) = param {
             buf[DEFAULT_RESP_POS] = value;
         }
-
+        
+        trace!(buffer = ?buf, "sending output report to device");
         match self.handle.send_output_report(&buf) {
             Ok(()) => {
-                debug!("wrote command to device");
-                trace!("sent command buffer to device: {:?}", buf);
+                debug!("successfully wrote command to device");
                 sleep_ms(50);
                 Ok(())
             }
@@ -386,7 +399,7 @@ impl HeadsetInfo {
         });
 
         match target {
-            None => Err(HeadsetError::GetHandleError),
+            None => Err(HeadsetError::EmptyHandle),
             Some(target) => match target.open_device(&api) {
                 Ok(device) => {
                     debug!("got device handle successfully");
@@ -418,16 +431,54 @@ impl HeadsetInfo {
         }
     }
 
-    pub fn listen_for_updates(&mut self) -> Result<(), HeadsetError> {
+    pub fn send_info_to_gui(&mut self, sender: Sender<ThreadMessage>) -> Result<(), HeadsetError> {
+        send_to_gui!(self, battery_level, sender);
+        send_to_gui!(self, charging_status, sender);
+        send_to_gui!(self, headset_status, sender);
+        send_to_gui!(self, sidetone_status, sender);
+        send_to_gui!(self, sidetone_volume, sender);
+        send_to_gui!(self, noisegate_status, sender);
+        send_to_gui!(self, microphone_status, sender);
+        send_to_gui!(self, shutdown_time, sender);
+        Ok(())
+    }
+
+    pub fn listen_for_updates(&mut self, hardware_tx: Sender<ThreadMessage>, hardware_rx: Receiver<ThreadMessage>) -> Result<(), HeadsetError> {
         info!("successfully started background listening");
         let mut buf = [0u8; 20];
 
         loop {
+            // test receiving data across threads
+            match hardware_rx.try_recv() {
+                Ok(resp) => {
+                    trace!("new message from gui thread: {:?}", resp);
+                    match resp {
+                        ThreadMessage::Ready => {
+                            match self.send_info_to_gui(hardware_tx.clone()) {
+                                Ok(()) => { 
+                                    debug!("successfully sent fields to gui thread");
+                                    hardware_tx.send(ThreadMessage::Ready).unwrap();
+                                },
+                                Err(error) => warn!("unexpected error occurred while sending data to gui thread! {}", error)
+                            }
+                        },
+                        _ => ()
+                    }
+                },
+                Err(_) => ()
+            }
+
             match self.handle.read_timeout(&mut buf, 10) {
                 Ok(READ_EMPTY) => (),
                 Ok(_) => {
                     if let Ok(resp) = Commands::parse(&buf) {
                         info!("{}", resp);
+
+                        // test sending data across threads
+                        match hardware_tx.send(ThreadMessage::HeadsetResponse(resp)) {
+                            Ok(_) => trace!("sent {:?} message to gui", resp),
+                            Err(error) => warn!("error occurred while sending data over threads! {}", error)
+                        }
 
                         match resp {
                             Response::BatteryLevel(_) => self.battery_level = Some(resp),
@@ -451,6 +502,7 @@ impl HeadsetInfo {
                     return Err(HeadsetError::HidApiError { msg: error.to_string() })
                 }
             }
+
         }
     }
 

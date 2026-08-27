@@ -4,7 +4,7 @@ mod ui;
 use hidapi::{HidApi, HidError, HidDevice};
 use crossbeam_channel::unbounded;
 use tracing::{info, debug, error, warn, trace, Level, subscriber};
-use tracing_subscriber::{FmtSubscriber, EnvFilter, fmt, prelude::*, registry::Registry};
+use tracing_subscriber::{FmtSubscriber, EnvFilter, fmt, prelude::*, registry::Registry, filter::{Targets, LevelFilter, Directive}};
 use hardware::{Response, HeadsetInfo, Commands, HeadsetError};
 use clap::Parser;
 use std::thread::{sleep, spawn};
@@ -12,6 +12,21 @@ use std::time::Duration;
 use std::sync::{Arc, Mutex};
 use std::env;
 
+pub fn sleep_ms(ms: u64) {
+    sleep(Duration::from_millis(ms))
+}
+
+pub fn sleep_sec(sec: u64) {
+    sleep(Duration::from_secs(sec))
+}
+
+#[derive(Debug)]
+enum ThreadMessage {
+    HeadsetResponse(hardware::Response),
+    Request(hardware::Commands),
+    Ready,
+    Set { command: hardware::Commands, param: Option<u8> }
+}
 
 fn init_device() -> Result<HeadsetInfo, HeadsetError> {
     let mut device = HeadsetInfo::new()?;
@@ -30,7 +45,11 @@ fn logger_setup() {
 
     let environment = EnvFilter::builder().with_default_directive(Level::INFO.into())
                                         .from_env_lossy()
-                                        .max_level_hint();
+                                        .add_directive("smithay_clipboard=off".parse().unwrap())
+                                        .add_directive("calloop_wayland_source=off".parse().unwrap())
+                                        .add_directive("calloop=off".parse().unwrap());
+    
+    let level_hint = environment.max_level_hint();
 
     let subscriber = Registry::default()
                             .with(formatter)
@@ -39,7 +58,7 @@ fn logger_setup() {
     let logging = subscriber::set_global_default(subscriber);
 
     match logging {
-        Ok(_) => if let Some(level) = environment {
+        Ok(_) => if let Some(level) = level_hint {
             println!("logging enabled. current verbosity level: {}", level.to_string().to_uppercase());
             if cfg!(unix) { warn!("unix system detected, device information may be inaccurate") }
         },
@@ -49,6 +68,8 @@ fn logger_setup() {
 
 fn main() {
     logger_setup();
+    let (hardware_tx, gui_rx) = unbounded::<ThreadMessage>();
+    let (gui_tx, hardware_rx) = unbounded::<ThreadMessage>();
 
     spawn(move || {
         let mut retry_count: u8 = 0;
@@ -57,10 +78,12 @@ fn main() {
         // Attempt to print device information
         if let Ok(temp) = HeadsetInfo::new() {
             let _ = temp.about_device();
+        } else {
+            warn!("failed to print device information!")
         }
 
         'keep_alive: loop {
-            info!("trying to connect to headset...");
+            info!("trying to initialize headset...");
 
             let mut device = match init_device() {
                 Ok(device) => {
@@ -75,7 +98,7 @@ fn main() {
                         _ => 60
                     };
                     error!("device initialization failed: {} attempt: #{}, delay until next attempt: {} sec(s)", error, retry_count, retry_sec);
-                    hardware::sleep_sec(retry_sec);
+                    sleep_sec(retry_sec);
                     retry_count = retry_count.saturating_add(1);
 
                     continue 'keep_alive;
@@ -83,21 +106,13 @@ fn main() {
             };
 
             info!("device ready!");
-            if let Err(error) = device.listen_for_updates() {
-                error!("{}. attempting to re-initialize...", error);
+            if let Err(error) = device.listen_for_updates(hardware_tx.clone(), hardware_rx.clone()) {
+                error!("{} attempting to re-initialize device...", error);
             }
 
-            hardware::sleep_sec(2);
+            sleep_sec(2);
         }
     });
 
-    // ui::main();
-
-    let (s,r) = unbounded::<Response>();
-
-    match r.recv() {
-        Ok(_) => (),
-        Err(_) => ()
-    }
-
+    ui::main(gui_tx, gui_rx);
 }
