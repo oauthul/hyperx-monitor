@@ -46,15 +46,13 @@ pub fn main(gui_tx: Sender<ThreadMessage>, gui_rx: Receiver<ThreadMessage>) -> e
 
     gui_tx.send(ThreadMessage::Ready).unwrap();
 
-    let test_struct: HeadsetInfoGui = HeadsetInfoGui { sender: Some(gui_tx.clone()), receiver: Some(gui_rx.clone()), ..Default::default() };
-
     eframe::run_native(
         "My egui App",
         options,
         Box::new(|cc| {
             let ctx = &cc.egui_ctx;
 
-            Ok(Box::<test_struct>::default())
+            Ok(Box::<HeadsetInfoGui>::default())
         }),
     )
 }

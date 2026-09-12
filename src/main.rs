@@ -47,7 +47,8 @@ fn logger_setup() {
                                         .from_env_lossy()
                                         .add_directive("smithay_clipboard=off".parse().unwrap())
                                         .add_directive("calloop_wayland_source=off".parse().unwrap())
-                                        .add_directive("calloop=off".parse().unwrap());
+                                        .add_directive("calloop=off".parse().unwrap())
+                                        .add_directive("winit=off".parse().unwrap());
     
     let level_hint = environment.max_level_hint();
 
