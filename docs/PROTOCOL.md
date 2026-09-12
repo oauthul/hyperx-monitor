@@ -12,13 +12,13 @@ The default structure for each packet is:
 
 ``[0x06, 0xFF, 0xBB, COMMAND]`` or ``[0x06, 0xFF, 0xBB, COMMAND, PARAMETER]``
 
-|  Byte  |  Value  |  Description  |
-|:------:|:-------:|:-------------:|
-|0|0x06 (or 6)|Report ID|
-|1|0xFF (or 255)|Fixed Value|
-|2|0xBB (or 187)|Fixed Value|
-|3|COMMAND|Request/Response|
-|4|PARAMETER|Request/Response|
+|  Byte  |    Value    |  Description  |
+|:------:|:-----------:|:-------------:|
+|    0   |0x06  (or 6) |   Report ID   |
+|    1   |0xFF (or 255)|  Fixed Value  |
+|    2   |0xBB (or 187)|  Fixed Value  |
+|    3   |   COMMAND   |Request/Response|
+|    4   |  PARAMETER  |Request/Response|
 
 ``COMMAND`` is the type of command being sent/received as an integer or as hexadecimal.<br>
 ``PARAMETER`` is the parameter being sent/received as an integer or as hexadecimal.
