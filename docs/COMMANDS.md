@@ -42,9 +42,9 @@ Looking for how the device [communicates](../docs/PROTOCOL.md)?
 **Description**: Finds the current battery level of the headset.</br>
 **Command Value**: `2` or `0x02`</br>
 **Requesting Command Structure**: `0x06, 0xFF, 0xBB, 0x02`</br>
-**Response**: Range between 1-100</br>
+**Response**: Range between 0-100</br>
 - The battery level is found at the 8th position of the response, as seen the example below with a level of `31` or `0x1F`.
-- The battery level can only be valid between `1` to `100`, otherwise the device is either dead or reporting an invalid battery level.
+- The battery level can only be valid between `0` to `100`, otherwise the device is either disconnected or reporting an invalid battery level.
 
 **Read/Write**: Read-only</br>
 **Response Example(s)**: `0x06, 0xFF, 0xBB, 0x02, 0x00, 0xE, 0x98, 0x1F` (hexadecimal), `6, 255, 187, 2, 0, 14, 152, 31` (decimal)</br>

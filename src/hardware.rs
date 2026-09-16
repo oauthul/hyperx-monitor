@@ -128,7 +128,7 @@ impl Commands {
             },
 
             Self::GetBatteryLevel => match resp {
-                1..=100 => Ok(Response::BatteryLevel(resp)),
+                0..=100 => Ok(Response::BatteryLevel(resp)),
                 _ => Err(HeadsetError::ParseError { msg: format!("invalid response value: {}", resp) })
             },
 
