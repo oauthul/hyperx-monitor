@@ -20,7 +20,5 @@ jobs:
     - uses: actions/checkout@v4
     - name: install deps
       run: sudo apt update && sudo apt-get install libudev-dev libgtk-3-dev libxdo-dev libappindicator3-dev
-    - name: check package
-      run: cargo check
     - name: build binary
       run: cargo build --verbose
