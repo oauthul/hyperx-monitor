@@ -432,6 +432,8 @@ impl HeadsetInfo {
     }
 
     pub fn send_info_to_gui(&mut self, sender: Sender<ThreadMessage>) -> Result<(), HeadsetError> {
+        self.simulate_connect();
+        
         send_to_gui!(self, battery_level, sender);
         send_to_gui!(self, charging_status, sender);
         send_to_gui!(self, headset_status, sender);
@@ -591,6 +593,20 @@ impl HeadsetInfo {
     pub fn set_sidetone_volume(&mut self, volume: Option<u8>) -> Result<(), HeadsetError> {
         debug!("querying device");
         execute!(self, sidetone_volume, Commands::SetSidetoneVolume, volume);
+
+        Ok(())
+    }
+
+    #[instrument(level = "debug", skip_all)]
+    pub fn simulate_connect(&mut self) -> Result<(), HeadsetError> {
+        self.battery_level = Some(Response::BatteryLevel(50));
+        self.charging_status = Some(Response::ChargingStatus(true));
+        self.headset_status = Some(Response::IsActive(true));
+        self.microphone_status = Some(Response::MicrophoneStatus(true));
+        self.shutdown_time = Some(Response::AutoShutdownTime(40));
+        self.sidetone_status = Some(Response::SidetoneStatus(true));
+        self.sidetone_volume = Some(Response::SidetoneVolume(20));
+        self.noisegate_status = Some(Response::NoiseGateStatus(false));
 
         Ok(())
     }

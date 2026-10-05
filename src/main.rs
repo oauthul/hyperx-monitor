@@ -60,7 +60,9 @@ fn logger_setup() {
 
     match logging {
         Ok(_) => if let Some(level) = level_hint {
-            println!("logging enabled. current verbosity level: {}", level.to_string().to_uppercase());
+            println!("logging enabled");
+            println!("disabled scopes: smithay_clipboard, calloop_wayland_source, calloop, winit");
+            println!("current verbosity level: {}", level.to_string().to_uppercase());
             if cfg!(unix) { warn!("unix system detected, device information may be inaccurate") }
         },
         Err(error) => eprintln!("failed to initialize logging: {}", error)
@@ -84,7 +86,7 @@ fn main() {
         }
 
         'keep_alive: loop {
-            info!("trying to initialize headset...");
+            debug!("trying to initialize headset...");
 
             let mut device = match init_device() {
                 Ok(device) => {
